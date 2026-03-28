@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+.playwright/
+playwright-report/
+node_modules/
+.venv/
+venv/
+*.log
