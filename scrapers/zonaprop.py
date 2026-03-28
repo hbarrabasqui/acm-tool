@@ -107,6 +107,10 @@ def _parse_listing(card, source_url: str) -> Optional[dict]:
         loc_el = card.find("h4", class_=re.compile(r"location-text", re.I))
         barrio_encontrado = loc_el.get_text(strip=True) if loc_el else ""
 
+        # Dirección de calle — h4 con clase postingLocations-module__location-address
+        addr_el = card.find("h4", class_=re.compile(r"location-address", re.I))
+        direccion_calle = addr_el.get_text(strip=True) if addr_el else ""
+
         # Descripción extra
         desc_el = card.find("p")
         descripcion = desc_el.get_text(strip=True)[:300] if desc_el else ""
@@ -115,6 +119,7 @@ def _parse_listing(card, source_url: str) -> Optional[dict]:
             "fuente": "Zonaprop",
             "titulo": titulo,
             "barrio": barrio_encontrado,
+            "direccion": direccion_calle,
             "tipo": "",
             "ambientes": ambientes,
             "metros_cubiertos": metros,

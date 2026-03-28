@@ -1,10 +1,70 @@
 import streamlit as st
 import asyncio
 import threading
+import re
 import pandas as pd
+import folium
+from streamlit_folium import st_folium
+from geopy.geocoders import Nominatim
+from geopy.distance import geodesic
 from scrapers.zonaprop import scrape_zonaprop
 from scrapers.argenprop import scrape_argenprop
 from analyzer import analyze_acm
+
+# Geocodificador compartido
+_geolocator = Nominatim(user_agent="acm-tool")
+
+# Mapeo jurisdicción → query Nominatim precisa
+JURISDICCION_GEOCODING = {
+    "CABA":                        "Ciudad Autónoma de Buenos Aires, Argentina",
+    "GBA - Almirante Brown":       "Almirante Brown, Buenos Aires, Argentina",
+    "GBA - Avellaneda":            "Avellaneda, Buenos Aires, Argentina",
+    "GBA - Berazategui":           "Berazategui, Buenos Aires, Argentina",
+    "GBA - Esteban Echeverría":    "Esteban Echeverría, Buenos Aires, Argentina",
+    "GBA - Ezeiza":                "Ezeiza, Buenos Aires, Argentina",
+    "GBA - Florencio Varela":      "Florencio Varela, Buenos Aires, Argentina",
+    "GBA - General San Martín":    "General San Martín, Buenos Aires, Argentina",
+    "GBA - Hurlingham":            "Hurlingham, Buenos Aires, Argentina",
+    "GBA - Ituzaingó":             "Ituzaingó, Buenos Aires, Argentina",
+    "GBA - José C. Paz":           "José C. Paz, Buenos Aires, Argentina",
+    "GBA - La Matanza":            "La Matanza, Buenos Aires, Argentina",
+    "GBA - La Plata":              "La Plata, Buenos Aires, Argentina",
+    "GBA - Lanús":                 "Lanús, Buenos Aires, Argentina",
+    "GBA - Lomas de Zamora":       "Lomas de Zamora, Buenos Aires, Argentina",
+    "GBA - Malvinas Argentinas":   "Malvinas Argentinas, Buenos Aires, Argentina",
+    "GBA - Merlo":                 "Merlo, Buenos Aires, Argentina",
+    "GBA - Moreno":                "Moreno, Buenos Aires, Argentina",
+    "GBA - Morón":                 "Morón, Buenos Aires, Argentina",
+    "GBA - Quilmes":               "Quilmes, Buenos Aires, Argentina",
+    "GBA - San Fernando":          "San Fernando, Buenos Aires, Argentina",
+    "GBA - San Isidro":            "San Isidro, Buenos Aires, Argentina",
+    "GBA - San Miguel":            "San Miguel, Buenos Aires, Argentina",
+    "GBA - Tigre":                 "Tigre, Buenos Aires, Argentina",
+    "GBA - Tres de Febrero":       "Tres de Febrero, Buenos Aires, Argentina",
+    "GBA - Vicente López":         "Vicente López, Buenos Aires, Argentina",
+}
+
+@st.cache_data(show_spinner=False)
+def geocodificar(direccion: str, ciudad: str = "Ciudad Autónoma de Buenos Aires, Argentina"):
+    """Convierte una dirección a coordenadas (lat, lon). Retorna None si falla.
+    Resultado cacheado — Nominatim solo se consulta una vez por dirección."""
+    import time, re
+    try:
+        # Limpiar "al NNNN" -> "NNNN" para que Nominatim lo interprete como numeración
+        direccion_limpia = re.sub(r'\bal\b\s*(\d)', r'\1', direccion, flags=re.IGNORECASE).strip()
+        # Si solo tiene nombre de barrio (sin número), agregar ciudad directamente
+        query = f"{direccion_limpia}, {ciudad}"
+        time.sleep(1.1)  # Nominatim exige máximo 1 request/segundo
+        loc = _geolocator.geocode(query, timeout=10)
+        if loc:
+            # Verificar que el resultado esté dentro del GBA/CABA (bbox razonable)
+            # CABA: lat -34.70 a -34.52, lon -58.53 a -58.33
+            # Ampliamos un poco para cubrir GBA cercano
+            if -34.85 < loc.latitude < -34.40 and -58.70 < loc.longitude < -58.20:
+                return (loc.latitude, loc.longitude)
+    except Exception:
+        pass
+    return None
 
 
 def run_async(coro):
@@ -80,6 +140,11 @@ with st.form("acm_form"):
 
     with col1:
         barrio = st.text_input("Barrio / Zona *", placeholder="ej: Palermo, Belgrano")
+        ciudad = st.selectbox(
+            "Jurisdicción *",
+            list(JURISDICCION_GEOCODING.keys()),
+            help="CABA o partido del GBA. Se usa para precisar la búsqueda y la geocodificación en el mapa."
+        )
         tipo = st.selectbox("Tipo de propiedad *", ["Departamento", "Casa", "PH", "Local", "Oficina"])
         ambientes = st.selectbox("Ambientes *", [1, 2, 3, 4, 5, "6+"])
 
@@ -124,6 +189,21 @@ with st.form("acm_form"):
         help="Este texto va directo al análisis de IA. Usalo para agregar cualquier contexto que no esté en los campos anteriores."
     )
 
+    st.markdown("#### 🗺️ Mapa de ubicación (opcional)")
+    st.caption("Si ingresás una dirección de referencia se mostrará el mapa. Si lo dejás vacío se omite.")
+    direccion_referencia = st.text_input(
+        "Dirección de referencia",
+        placeholder="ej: Gorriti 4500, Palermo, Buenos Aires",
+        help="La propiedad que querés valuar. Se marcará con un pin especial en el mapa."
+    )
+    radio_km = st.select_slider(
+        "Radio de búsqueda",
+        options=[0.5, 1.0, 1.5, 2.0, 3.0, 5.0],
+        value=2.0,
+        format_func=lambda x: f"{int(x*1000)}m" if x < 1 else f"{x:.1f}km"
+    )
+    usar_mapa = bool(direccion_referencia)
+
     st.markdown("#### 🌐 Fuentes de búsqueda")
     col_f1, col_f2 = st.columns(2)
     with col_f1:
@@ -159,6 +239,7 @@ if submitted:
 
     prop = {
         "barrio": barrio,
+        "ciudad": ciudad,
         "tipo": tipo,
         "ambientes": ambientes,
         "metros_cubiertos": metros_cubiertos,
@@ -217,6 +298,9 @@ if submitted:
     st.session_state["prop"] = prop
     st.session_state["barrio"] = barrio
     st.session_state["tipo"] = tipo
+    st.session_state["usar_mapa"] = usar_mapa
+    st.session_state["direccion_referencia"] = direccion_referencia
+    st.session_state["radio_km"] = radio_km
 
 # ── Resultados (se muestran desde session_state) ───────────────────────────────
 if "resultados" in st.session_state and st.session_state["resultados"]:
@@ -261,17 +345,124 @@ if "resultados" in st.session_state and st.session_state["resultados"]:
             st.markdown("")
 
     st.markdown("#### 📋 Propiedades comparables encontradas")
-    columnas_mostrar = [c for c in ["fuente","titulo","barrio","tipo","ambientes","metros_cubiertos",
-                                    "precio_usd","precio_m2","antiguedad","amenities","url"]
-                        if c in df.columns or (c == "precio_m2" and "precio_m2" in df_valid.columns)]
-    df_display = df_valid[columnas_mostrar] if not df_valid.empty else df
-    st.dataframe(df_display, use_container_width=True, hide_index=True,
+    # La tabla muestra TODAS las propiedades (incluso las sin precio/m²)
+    df_tabla = df.copy()
+    if "precio_usd" in df_tabla.columns and "metros_cubiertos" in df_tabla.columns:
+        df_tabla["precio_m2"] = df_tabla.apply(
+            lambda r: r["precio_usd"] / r["metros_cubiertos"]
+            if r.get("metros_cubiertos", 0) > 0 and r.get("precio_usd", 0) > 0 else None,
+            axis=1
+        )
+
+    # Agregar columna mapa si se usó geolocalización
+    urls_en_mapa = st.session_state.get("urls_en_mapa")
+    if urls_en_mapa is not None:
+        df_tabla["en_mapa"] = df_tabla["url"].apply(lambda u: "📍" if u in urls_en_mapa else "")
+
+    columnas_mostrar = [c for c in ["en_mapa","fuente","titulo","barrio","tipo","ambientes",
+                                    "metros_cubiertos","precio_usd","precio_m2","antiguedad","amenities","url"]
+                        if c in df_tabla.columns]
+    st.dataframe(df_tabla[columnas_mostrar], use_container_width=True, hide_index=True,
                  column_config={
+                     "en_mapa": st.column_config.TextColumn("📍"),
                      "url": st.column_config.LinkColumn("🔗 Ver publicación"),
                      "precio_usd": st.column_config.NumberColumn("Precio USD", format="$%d"),
                      "precio_m2":  st.column_config.NumberColumn("USD/m²", format="$%d"),
                      "metros_cubiertos": st.column_config.NumberColumn("m² cub."),
                  })
+
+    # ── Mapa ──────────────────────────────────────────────────────────────────
+    if st.session_state.get("usar_mapa") and st.session_state.get("direccion_referencia"):
+        st.divider()
+        st.subheader("🗺️ Mapa de comparables")
+
+        dir_ref = st.session_state["direccion_referencia"]
+        radio_km = st.session_state["radio_km"]
+
+        ciudad_ctx = JURISDICCION_GEOCODING.get(prop.get("ciudad", "CABA"), "Ciudad Autónoma de Buenos Aires, Argentina")
+        with st.spinner("Geolocalizando propiedades..."):
+            coords_ref = geocodificar(dir_ref, ciudad_ctx)
+
+        if not coords_ref:
+            st.warning(f"No se pudo geolocalizar la dirección de referencia: '{dir_ref}'. Verificá que esté bien escrita.")
+        else:
+            # Geocodificar cada comparable
+            geolocalizados = []
+            no_en_mapa = 0
+            urls_en_mapa = set()
+
+            for item in resultados:
+                # Usar campo "direccion" si existe, sino "barrio"
+                direccion = item.get("direccion", "") or item.get("barrio", "")
+                # Solo geocodificar si tiene número de calle (dirección real, no solo barrio)
+                if not direccion or not re.search(r'\d{3,}', direccion):
+                    no_en_mapa += 1
+                    continue
+                # Usar la ciudad ingresada por el usuario como contexto de geocodificación
+                ciudad_ctx = JURISDICCION_GEOCODING.get(prop.get("ciudad", "CABA"), "Ciudad Autónoma de Buenos Aires, Argentina")
+                coords = geocodificar(direccion, ciudad_ctx)
+                if coords:
+                    dist = geodesic(coords_ref, coords).km
+                    geolocalizados.append({**item, "_coords": coords, "_dist_km": round(dist, 2)})
+                    urls_en_mapa.add(item.get("url", ""))
+                else:
+                    no_en_mapa += 1
+
+            # Construir mapa
+            from folium.plugins import MarkerCluster
+            mapa = folium.Map(location=coords_ref, zoom_start=15)
+
+            # Círculo de radio
+            folium.Circle(
+                location=coords_ref,
+                radius=radio_km * 1000,
+                color="#E2231A",
+                fill=True,
+                fill_opacity=0.05,
+            ).add_to(mapa)
+
+            # Pin de referencia (propiedad a valuar) — fuera del cluster
+            folium.Marker(
+                location=coords_ref,
+                tooltip="📍 Propiedad a valuar",
+                popup=folium.Popup(f"<b>Propiedad a valuar</b><br>{dir_ref}", max_width=250),
+                icon=folium.Icon(color="red", icon="home", prefix="fa"),
+            ).add_to(mapa)
+
+            # Cluster para los comparables
+            cluster = MarkerCluster().add_to(mapa)
+            colores = {"Zonaprop": "blue", "ArgenProp": "green"}
+            for item in geolocalizados:
+                color = colores.get(item.get("fuente", ""), "gray")
+                precio = f"USD {item['precio_usd']:,}" if item.get("precio_usd") else "N/D"
+                metros = f"{item['metros_cubiertos']} m²" if item.get("metros_cubiertos") else "N/D"
+                ambientes = item.get("ambientes", "")
+                url = item.get("url", "")
+                link_html = f'<br><a href="{url}" target="_blank">🔗 Ver publicación</a>' if url else ""
+                popup_html = f"""
+                    <b>{item.get('fuente','')}</b><br>
+                    {item.get('barrio','')}<br>
+                    {precio} · {metros} · {ambientes}
+                    {link_html}
+                """
+                folium.Marker(
+                    location=item["_coords"],
+                    tooltip=f"{precio} · {metros}",
+                    popup=folium.Popup(popup_html, max_width=280),
+                    icon=folium.Icon(color=color, icon="building", prefix="fa"),
+                ).add_to(cluster)
+
+            st_folium(mapa, use_container_width=True, height=500)
+
+            col_geo1, col_geo2 = st.columns(2)
+            with col_geo1:
+                st.success(f"✅ {len(geolocalizados)} propiedades mostradas en el mapa")
+            with col_geo2:
+                if no_en_mapa > 0:
+                    st.info(f"ℹ️ {no_en_mapa} propiedades sin ubicación en el radio — aparecen solo en la tabla")
+
+            # Guardar urls_en_mapa para marcarlas en la tabla
+            st.session_state["urls_en_mapa"] = urls_en_mapa
 
     if analisis:
         st.divider()

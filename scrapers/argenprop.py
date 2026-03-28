@@ -142,6 +142,7 @@ def _parse_listing(card) -> Optional[dict]:
             "fuente": "ArgenProp",
             "titulo": titulo,
             "barrio": barrio_encontrado,
+            "direccion": barrio_encontrado,  # En ArgenProp el barrio ya es la dirección de calle
             "tipo": "",
             "ambientes": ambientes,
             "metros_cubiertos": metros,

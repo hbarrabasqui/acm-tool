@@ -8,3 +8,6 @@ pandas>=2.0.0
 python-dotenv>=1.0.0
 lxml>=5.0.0
 openpyxl>=3.1.0
+folium>=0.17.0
+streamlit-folium>=0.22.0
+geopy>=2.4.0
