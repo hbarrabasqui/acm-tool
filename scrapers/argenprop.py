@@ -72,8 +72,8 @@ def _parse_ambientes(features_ul) -> str:
     return ""
 
 
-def _build_url(prop: dict) -> str:
-    """Construye la URL de búsqueda en ArgenProp."""
+def _build_url(prop: dict, pagina: int = 1) -> str:
+    """Construye la URL de búsqueda en ArgenProp para una página dada."""
     tipo_map = {
         "Departamento": "departamento",
         "Casa": "casa",
@@ -99,7 +99,8 @@ def _build_url(prop: dict) -> str:
         if 1 <= n <= 6:
             amb_param = f"--{n}-ambientes"
 
-    return f"https://www.argenprop.com/{tipo_slug}-en-venta-en-{barrio_slug}{amb_param}"
+    pag_param = f"--pagina-{pagina}" if pagina > 1 else ""
+    return f"https://www.argenprop.com/{tipo_slug}-en-venta-en-{barrio_slug}{amb_param}{pag_param}"
 
 
 def _parse_listing(card) -> Optional[dict]:
@@ -157,19 +158,15 @@ def _parse_listing(card) -> Optional[dict]:
 
 # ── Scraper principal ──────────────────────────────────────────────────────────
 
-async def scrape_argenprop(prop: dict, max_results: int = 15) -> list[dict]:
+async def scrape_argenprop(prop: dict, max_results: int = 15, max_paginas: int = 5) -> list[dict]:
     """
-    Scrapea ArgenProp y devuelve lista de propiedades comparables.
-
-    Args:
-        prop: Diccionario con los datos de la propiedad buscada.
-        max_results: Máximo de resultados a retornar.
-
-    Returns:
-        Lista de dicts con propiedades normalizadas.
+    Scrapea ArgenProp paginando hasta obtener max_results o agotar max_paginas.
+    Reutiliza el mismo browser entre páginas para reducir overhead.
     """
-    url = _build_url(prop)
     resultados = []
+    barrio_keywords = [
+        w.lower() for w in re.split(r"[\s,]+", prop.get("barrio", "")) if len(w) > 2
+    ]
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -186,41 +183,49 @@ async def scrape_argenprop(prop: dict, max_results: int = 15) -> list[dict]:
         page = await context.new_page()
         await Stealth().apply_stealth_async(page)
 
-        try:
-            await page.goto(url, timeout=30_000, wait_until="domcontentloaded")
-            await page.wait_for_selector(".listing__item, .card", timeout=15_000)
-        except PWTimeout:
-            pass
+        for pagina in range(1, max_paginas + 1):
+            url = _build_url(prop, pagina)
+            try:
+                await page.goto(url, timeout=30_000, wait_until="domcontentloaded")
+                await page.wait_for_selector(".listing__item, .card", timeout=15_000)
+            except PWTimeout:
+                break  # Sin resultados en esta página, detenemos
 
-        for _ in range(3):
-            await page.mouse.wheel(0, 2000)
-            await asyncio.sleep(1.5)
+            for _ in range(3):
+                await page.mouse.wheel(0, 2000)
+                await asyncio.sleep(1.0)
 
-        html = await page.content()
+            html = await page.content()
+            soup = BeautifulSoup(html, "html.parser")
+
+            cards = (
+                soup.find_all("div", class_="listing__item") or
+                soup.find_all("div", class_=re.compile(r"listing__item|card-container", re.I)) or
+                soup.find_all("article")
+            )
+
+            if not cards:
+                break  # No hay más páginas
+
+            nuevos = 0
+            for card in cards:
+                item = _parse_listing(card)
+                if not item or item["precio_usd"] <= 0:
+                    continue
+                barrio_result = item["barrio"].lower() + " " + item.get("url", "").lower()
+                if barrio_keywords and not any(kw in barrio_result for kw in barrio_keywords):
+                    continue
+                if any(r["url"] == item["url"] for r in resultados):
+                    continue
+                resultados.append(item)
+                nuevos += 1
+                if len(resultados) >= max_results:
+                    break
+
+            if len(resultados) >= max_results or nuevos == 0:
+                break
+
         await browser.close()
-
-    soup = BeautifulSoup(html, "html.parser")
-
-    cards = (
-        soup.find_all("div", class_="listing__item") or
-        soup.find_all("div", class_=re.compile(r"listing__item|card-container", re.I)) or
-        soup.find_all("article")
-    )
-
-    barrio_keywords = [
-        w.lower() for w in re.split(r"[\s,]+", prop.get("barrio", "")) if len(w) > 2
-    ]
-
-    for card in cards[:max_results * 3]:
-        item = _parse_listing(card)
-        if not item or item["precio_usd"] <= 0:
-            continue
-        barrio_result = item["barrio"].lower()
-        if barrio_keywords and not any(kw in barrio_result for kw in barrio_keywords):
-            continue
-        resultados.append(item)
-        if len(resultados) >= max_results:
-            break
 
     return resultados
 

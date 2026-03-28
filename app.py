@@ -73,11 +73,36 @@ def run_async(coro):
     error = []
 
     def target():
-        # Windows requiere ProactorEventLoop para subprocesos (Playwright)
         loop = asyncio.ProactorEventLoop()
         asyncio.set_event_loop(loop)
         try:
             result.append(loop.run_until_complete(coro))
+        except Exception as e:
+            error.append(e)
+        finally:
+            loop.close()
+
+    t = threading.Thread(target=target)
+    t.start()
+    t.join()
+    if error:
+        raise error[0]
+    return result[0] if result else []
+
+
+def run_async_parallel(*coros):
+    """Corre múltiples coroutines en paralelo y devuelve lista de resultados."""
+    async def _gather():
+        return await asyncio.gather(*coros, return_exceptions=True)
+
+    result = []
+    error = []
+
+    def target():
+        loop = asyncio.ProactorEventLoop()
+        asyncio.set_event_loop(loop)
+        try:
+            result.append(loop.run_until_complete(_gather()))
         except Exception as e:
             error.append(e)
         finally:
@@ -260,23 +285,28 @@ if submitted:
         for barrio_actual in barrios:
             prop_barrio = {**prop, "barrio": barrio_actual}
 
+            # Construir coroutines a ejecutar en paralelo
+            coros = []
+            fuentes = []
             if usar_zonaprop:
-                st.write(f"📡 Buscando en Zonaprop — {barrio_actual}...")
-                try:
-                    zp_results = run_async(scrape_zonaprop(prop_barrio, resultados_por_barrio))
-                    resultados.extend(zp_results)
-                    st.write(f"✅ Zonaprop ({barrio_actual}): {len(zp_results)} resultados")
-                except Exception as e:
-                    st.write(f"⚠️ Zonaprop ({barrio_actual}): error — {e}")
-
+                coros.append(scrape_zonaprop(prop_barrio, resultados_por_barrio))
+                fuentes.append(("Zonaprop", barrio_actual))
             if usar_argenprop:
-                st.write(f"📡 Buscando en ArgenProp — {barrio_actual}...")
-                try:
-                    ap_results = run_async(scrape_argenprop(prop_barrio, resultados_por_barrio))
-                    resultados.extend(ap_results)
-                    st.write(f"✅ ArgenProp ({barrio_actual}): {len(ap_results)} resultados")
-                except Exception as e:
-                    st.write(f"⚠️ ArgenProp ({barrio_actual}): error — {e}")
+                coros.append(scrape_argenprop(prop_barrio, resultados_por_barrio))
+                fuentes.append(("ArgenProp", barrio_actual))
+
+            if not coros:
+                continue
+
+            st.write(f"📡 Buscando en {' y '.join(f[0] for f in fuentes)} — {barrio_actual} (en paralelo)...")
+            resultados_paralelos = run_async_parallel(*coros)
+
+            for (fuente, barrio_f), res in zip(fuentes, resultados_paralelos):
+                if isinstance(res, Exception):
+                    st.write(f"⚠️ {fuente} ({barrio_f}): error — {res}")
+                else:
+                    resultados.extend(res)
+                    st.write(f"✅ {fuente} ({barrio_f}): {len(res)} resultados")
 
         if not resultados:
             status.update(label="⚠️ Sin resultados", state="error")

@@ -33,8 +33,8 @@ def _parse_metros(text: str) -> Optional[float]:
     return None
 
 
-def _build_url(prop: dict) -> str:
-    """Construye la URL de búsqueda en Zonaprop."""
+def _build_url(prop: dict, pagina: int = 1) -> str:
+    """Construye la URL de búsqueda en Zonaprop para una página dada."""
     tipo_map = {
         "Departamento": "departamentos",
         "Casa": "casas",
@@ -52,17 +52,15 @@ def _build_url(prop: dict) -> str:
         .replace("ó", "o").replace("ú", "u").replace("ñ", "n")
     )
 
-    # Filtros de ambientes
     ambientes = prop.get("ambientes", None)
     amb_param = ""
     if ambientes and str(ambientes).isdigit():
         n = int(str(ambientes))
-        # Zonaprop usa: 2-ambientes, 3-ambientes, etc.
         if 1 <= n <= 6:
             amb_param = f"-{n}-ambientes"
 
-    url = f"https://www.zonaprop.com.ar/{tipo_slug}-venta-{barrio_slug}{amb_param}.html"
-    return url
+    pag_param = f"-{pagina}" if pagina > 1 else ""
+    return f"https://www.zonaprop.com.ar/{tipo_slug}-venta-{barrio_slug}{amb_param}{pag_param}.html"
 
 
 def _parse_listing(card, source_url: str) -> Optional[dict]:
@@ -134,19 +132,15 @@ def _parse_listing(card, source_url: str) -> Optional[dict]:
 
 # ── Scraper principal ──────────────────────────────────────────────────────────
 
-async def scrape_zonaprop(prop: dict, max_results: int = 15) -> list[dict]:
+async def scrape_zonaprop(prop: dict, max_results: int = 15, max_paginas: int = 5) -> list[dict]:
     """
-    Scrapea Zonaprop y devuelve lista de propiedades comparables.
-    
-    Args:
-        prop: Diccionario con los datos de la propiedad buscada.
-        max_results: Máximo de resultados a retornar.
-    
-    Returns:
-        Lista de dicts con propiedades normalizadas.
+    Scrapea Zonaprop paginando hasta obtener max_results o agotar max_paginas.
+    Reutiliza el mismo browser entre páginas para reducir overhead.
     """
-    url = _build_url(prop)
     resultados = []
+    barrio_keywords = [
+        w.lower() for w in re.split(r"[\s,]+", prop.get("barrio", "")) if len(w) > 2
+    ]
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -160,56 +154,57 @@ async def scrape_zonaprop(prop: dict, max_results: int = 15) -> list[dict]:
         )
         page = await context.new_page()
 
-        try:
-            await page.goto(url, timeout=30_000, wait_until="domcontentloaded")
-            # Esperar a que carguen los cards
-            await page.wait_for_selector(
-                "[data-qa='posting-card'], .postingCard, article",
-                timeout=15_000
+        for pagina in range(1, max_paginas + 1):
+            url = _build_url(prop, pagina)
+            try:
+                await page.goto(url, timeout=30_000, wait_until="domcontentloaded")
+                await page.wait_for_selector(
+                    "[data-qa='posting-card'], .postingCard, article",
+                    timeout=15_000
+                )
+            except PWTimeout:
+                pass  # Intentamos parsear lo que cargó
+
+            for _ in range(3):
+                await page.mouse.wheel(0, 2000)
+                await asyncio.sleep(1.0)
+
+            html = await page.content()
+            soup = BeautifulSoup(html, "html.parser")
+
+            cards = (
+                soup.find_all("div", class_=re.compile(r"postingsList-module__card-container", re.I)) or
+                soup.find_all("div", {"data-qa": re.compile(r"posting", re.I)}) or
+                soup.find_all("div", class_=re.compile(r"posting-card|postingCard", re.I)) or
+                soup.find_all("article")
             )
-        except PWTimeout:
-            pass  # Intentamos parsear lo que cargó
 
-        # Scroll para cargar más resultados (lazy loading)
-        for _ in range(3):
-            await page.mouse.wheel(0, 2000)
-            await asyncio.sleep(1.5)
+            if not cards:
+                break  # No hay más páginas
 
-        html = await page.content()
+            nuevos = 0
+            for card in cards:
+                layout_el = card.find("div", class_=re.compile(r"posting-card-layout", re.I))
+                if layout_el and "veclappa" in layout_el.get("data-to-posting", ""):
+                    continue
+                item = _parse_listing(card, url)
+                if not item or item["precio_usd"] <= 0:
+                    continue
+                barrio_result = item["barrio"].lower()
+                if barrio_keywords and not any(kw in barrio_result for kw in barrio_keywords):
+                    continue
+                # Evitar duplicados por URL
+                if any(r["url"] == item["url"] for r in resultados):
+                    continue
+                resultados.append(item)
+                nuevos += 1
+                if len(resultados) >= max_results:
+                    break
+
+            if len(resultados) >= max_results or nuevos == 0:
+                break
+
         await browser.close()
-
-    soup = BeautifulSoup(html, "html.parser")
-
-    # Selector principal de cards (clase actual de Zonaprop)
-    cards = (
-        soup.find_all("div", class_=re.compile(r"postingsList-module__card-container", re.I)) or
-        soup.find_all("div", {"data-qa": re.compile(r"posting", re.I)}) or
-        soup.find_all("div", class_=re.compile(r"posting-card|postingCard", re.I)) or
-        soup.find_all("article")
-    )
-
-    # Palabras clave del barrio buscado para filtrar resultados fuera de zona
-    barrio_keywords = [
-        w.lower() for w in re.split(r"[\s,]+", prop.get("barrio", "")) if len(w) > 2
-    ]
-
-    for card in cards[:max_results * 3]:
-        # Saltar cards tipo "veclappa" (títulos de propiedad con múltiples unidades anidadas)
-        layout_el = card.find("div", class_=re.compile(r"posting-card-layout", re.I))
-        if layout_el:
-            data_url = layout_el.get("data-to-posting", "")
-            if "veclappa" in data_url:
-                continue
-        item = _parse_listing(card, url)
-        if not item or item["precio_usd"] <= 0:
-            continue
-        # Filtrar: el barrio del resultado debe contener al menos una keyword del barrio buscado
-        barrio_result = item["barrio"].lower()
-        if barrio_keywords and not any(kw in barrio_result for kw in barrio_keywords):
-            continue
-        resultados.append(item)
-        if len(resultados) >= max_results:
-            break
 
     return resultados
 
