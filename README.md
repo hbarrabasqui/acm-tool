@@ -1,152 +1,142 @@
-# 🏠 ACM Automático · Remax
+# ACM Tool
 
 Herramienta para automatizar la búsqueda de propiedades comparables en el **Análisis Comparativo de Mercado (ACM)**.
 
-Busca automáticamente en **Zonaprop** y **MercadoLibre Inmuebles**, y usa **Claude AI** para generar un informe profesional con precio sugerido.
+Busca en **Zonaprop** y **ArgenProp** paginando múltiples páginas en paralelo, y usa **Claude AI** para generar un informe con precio sugerido, resumen ejecutivo, outliers y recomendaciones. Incluye mapa interactivo con geocodificación.
 
 ---
 
-## ⚡ Instalación rápida
+## Instalación
 
-### 1. Requisitos previos
-- Python 3.10 o superior → https://python.org
-- pip (viene con Python)
+### Requisitos
+- Python 3.10 o superior
+- API Key de Anthropic → https://console.anthropic.com/
 
-### 2. Clonar / descomprimir el proyecto
+### Pasos
+
 ```bash
-cd acm-remax
-```
+# 1. Clonar el repositorio
+git clone https://github.com/hbarrabasqui/acm-tool.git
+cd acm-tool
 
-### 3. Crear entorno virtual (recomendado)
-```bash
+# 2. Crear entorno virtual
 python -m venv venv
 
-# En Windows:
+# Windows:
 venv\Scripts\activate
-
-# En Mac/Linux:
+# Mac/Linux:
 source venv/bin/activate
-```
 
-### 4. Instalar dependencias
-```bash
+# 3. Instalar dependencias
 pip install -r requirements.txt
-```
 
-### 5. Instalar el navegador de Playwright
-```bash
+# 4. Instalar Chromium (navegador headless)
 playwright install chromium
-```
 
-### 6. Configurar la API Key de Claude
-```bash
-# Copiar el archivo de ejemplo
-cp .env.example .env
-
-# Editar .env con tu editor favorito y pegar tu API Key
-# Obtenela gratis en: https://console.anthropic.com/
-```
-
-El archivo `.env` debe quedar así:
-```
+# 5. Configurar API Key
+# Crear archivo .env en la raíz del proyecto con:
 ANTHROPIC_API_KEY=sk-ant-tu-clave-aqui
-```
 
-### 7. Correr la aplicación
-```bash
+# 6. Correr la app
 streamlit run app.py
 ```
 
-Se abre automáticamente en `http://localhost:8501` 🎉
+Se abre en `http://localhost:8501`
 
 ---
 
-## 🗂️ Estructura del proyecto
+## Uso
 
-```
-acm-remax/
-├── app.py                  ← Interfaz Streamlit (formulario + resultados)
-├── analyzer.py             ← Análisis con Claude API
-├── scrapers/
-│   ├── __init__.py
-│   ├── zonaprop.py         ← Scraper Zonaprop (Playwright + BS4)
-│   └── mercadolibre.py     ← Scraper MercadoLibre (Playwright + BS4)
-├── requirements.txt
-├── .env.example            ← Template de configuración
-├── .gitignore
-└── README.md
-```
+1. Completar el formulario:
+   - **Barrio / Zona**: nombre del barrio (ej: Palermo, San Nicolás). Acepta múltiples separados por coma.
+   - **Jurisdicción**: CABA o partido del GBA (selectbox — evita ambigüedad en geocodificación)
+   - **Tipo, ambientes, m², antigüedad, amenities**
+   - **Contexto libre**: instrucciones adicionales para Claude (ej: "el dueño necesita vender rápido")
+   - **Dirección de referencia** (opcional): activa el mapa con pins de cada comparable
 
----
+2. Ajustar fuentes y cantidad máxima de resultados por fuente (default 50, máximo 100)
 
-## 🔧 Uso
+3. Click en **"Buscar comparables y generar ACM"**
 
-1. Completar el formulario con los datos de la propiedad a valuar:
-   - Barrio, tipo, ambientes, m², antigüedad
-   - Amenities (terraza, cochera, piscina, etc.)
-   - Precio estimado (opcional)
-
-2. Elegir las fuentes (Zonaprop, MercadoLibre)
-
-3. Hacer click en **"Buscar comparables y generar ACM"**
-
-4. Ver:
-   - Tabla de propiedades comparables con precios y m²
+4. Resultados:
    - Métricas: precio promedio, USD/m², mínimo, máximo
-   - Informe de IA: precio sugerido, resumen ejecutivo, outliers, recomendaciones
-   - Exportar resultados a CSV
+   - Tabla completa de comparables con links a cada publicación
+   - Mapa interactivo (si se ingresó dirección de referencia) — el radio se ajusta sin repetir la búsqueda
+   - Informe de IA: precio sugerido, resumen, outliers, recomendaciones
+   - Exportar a Excel con hipervínculos clickeables
 
 ---
 
-## ⚠️ Notas importantes
+## Estructura
 
-### Sobre el scraping
-- Zonaprop y MercadoLibre son sitios públicos; el scraping es para uso personal del agente.
-- Los sitios pueden cambiar su HTML en cualquier momento → si los resultados fallan, revisar los selectores CSS en `scrapers/zonaprop.py` y `scrapers/mercadolibre.py`.
-- Playwright ejecuta un navegador real (Chromium headless), por eso funciona aunque el sitio use JavaScript.
-
-### Detección de bloqueos
-Si el scraper retorna 0 resultados, puede que el sitio esté bloqueando el bot. Opciones:
-1. Correr con `headless=False` en el scraper para ver qué pasa en el navegador
-2. Agregar delays más largos entre requests
-3. Rotar User-Agents
-
-### Integración con plataforma Remax (próximo paso)
-Para automatizar el login en la plataforma interna de Remax:
-- Crear `scrapers/remax_internal.py`
-- Usar Playwright para navegar a la URL interna, hacer `page.fill("#usuario", usuario)` y `page.fill("#password", password)`
-- Revisar los Términos de Uso de Remax antes de activarlo
+```
+acm-tool/
+├── app.py              — Interfaz Streamlit (formulario + resultados + mapa)
+├── analyzer.py         — Análisis con Claude API
+├── scrapers/
+│   ├── zonaprop.py     — Scraper Zonaprop (Playwright + BS4, paginado)
+│   └── argenprop.py    — Scraper ArgenProp (Playwright + BS4 + stealth, paginado)
+├── requirements.txt
+└── .env                — API Key (no se sube a GitHub)
+```
 
 ---
 
-## 🛠️ Troubleshooting
+## Detalles técnicos
 
-**Error: `playwright install` no funciona**
+### Scrapers
+- Usan **Playwright** (Chromium headless) para renderizar JS antes de parsear con BeautifulSoup
+- **Paginan hasta 10 páginas** por fuente, reutilizando el mismo browser entre páginas
+- **Corren en paralelo** (asyncio.gather): Zonaprop y ArgenProp al mismo tiempo
+- ArgenProp usa **playwright-stealth** para evadir detección de bots
+- Filtro de barrio con normalización de acentos y word boundary (evita falsos positivos como "san" dentro de "santos")
+- En Windows Streamlit requiere `asyncio.ProactorEventLoop` en thread separado
+
+### Mapa
+- Geocodificación con **Nominatim/OpenStreetMap** (gratuito, sin API key)
+- Cache con `@st.cache_data` para no repetir geocodificaciones
+- Solo geocodifica propiedades con número de calle (no solo nombre de barrio)
+- Bounding box de validación para descartar resultados fuera del área
+- La jurisdicción seleccionada se pasa como contexto a Nominatim para evitar ambigüedad CABA vs provincia
+
+### IA
+- Modelo: `claude-sonnet-4-20250514`
+- El campo "contexto libre" permite agregar instrucciones específicas sin tocar el código
+
+---
+
+## Troubleshooting
+
+**El scraper devuelve 0 resultados**
+- Verificar conexión a internet
+- El sitio puede haber cambiado su HTML → revisar selectores en `scrapers/zonaprop.py` o `scrapers/argenprop.py`
+- Probar con un barrio más conocido (Palermo, Belgrano)
+
+**Error: ANTHROPIC_API_KEY not found**
+- Verificar que existe el archivo `.env` en la raíz con la clave correcta
+
+**Error: playwright install no funciona**
 ```bash
 python -m playwright install chromium
 ```
 
-**Error: `ANTHROPIC_API_KEY not found`**
-- Verificar que el archivo `.env` existe y tiene la clave correcta
-- Asegurarse de estar corriendo desde la carpeta del proyecto
-
-**El scraper devuelve 0 resultados**
-- Verificar que hay conexión a internet
-- Probar con un barrio más conocido (ej: Palermo, Belgrano)
-- Correr el scraper directamente para debug:
-  ```bash
-  python -m scrapers.zonaprop
-  ```
+**El mapa muestra propiedades fuera del barrio**
+- Verificar que la jurisdicción seleccionada es correcta (CABA vs GBA)
+- Nominatim puede fallar con calles muy cortas o poco conocidas
 
 ---
 
-## 📦 Dependencias principales
+## Dependencias principales
 
 | Paquete | Uso |
 |---------|-----|
-| `streamlit` | Interfaz web del agente |
-| `playwright` | Automatización del navegador |
+| `streamlit` | Interfaz web |
+| `playwright` | Navegador headless para scraping |
+| `playwright-stealth` | Evasión de detección en ArgenProp |
 | `beautifulsoup4` | Parsing de HTML |
 | `anthropic` | Claude API para análisis ACM |
-| `pandas` | Manejo de datos tabulares |
+| `pandas` | Tablas de datos |
+| `folium` + `streamlit-folium` | Mapa interactivo |
+| `geopy` | Geocodificación y cálculo de distancias |
+| `openpyxl` | Excel con hipervínculos |
 | `python-dotenv` | Variables de entorno |
