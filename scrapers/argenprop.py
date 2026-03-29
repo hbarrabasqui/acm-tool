@@ -158,14 +158,19 @@ def _parse_listing(card) -> Optional[dict]:
 
 # ── Scraper principal ──────────────────────────────────────────────────────────
 
-async def scrape_argenprop(prop: dict, max_results: int = 15, max_paginas: int = 5) -> list[dict]:
+async def scrape_argenprop(prop: dict, max_results: int = 15, max_paginas: int = 10) -> list[dict]:
     """
     Scrapea ArgenProp paginando hasta obtener max_results o agotar max_paginas.
     Reutiliza el mismo browser entre páginas para reducir overhead.
     """
     resultados = []
+    def _normalizar(s):
+        for a, b in [("á","a"),("é","e"),("í","i"),("ó","o"),("ú","u"),("ñ","n")]:
+            s = s.replace(a, b)
+        return s.lower()
+
     barrio_keywords = [
-        w.lower() for w in re.split(r"[\s,]+", prop.get("barrio", "")) if len(w) > 2
+        _normalizar(w) for w in re.split(r"[\s,]+", prop.get("barrio", "")) if len(w) > 2
     ]
 
     async with async_playwright() as p:
@@ -212,8 +217,8 @@ async def scrape_argenprop(prop: dict, max_results: int = 15, max_paginas: int =
                 item = _parse_listing(card)
                 if not item or item["precio_usd"] <= 0:
                     continue
-                barrio_result = item["barrio"].lower() + " " + item.get("url", "").lower()
-                if barrio_keywords and not any(kw in barrio_result for kw in barrio_keywords):
+                barrio_result = _normalizar(item["barrio"] + " " + item.get("url", ""))
+                if barrio_keywords and not any(re.search(r'\b' + re.escape(kw) + r'\b', barrio_result) for kw in barrio_keywords):
                     continue
                 if any(r["url"] == item["url"] for r in resultados):
                     continue
@@ -229,16 +234,3 @@ async def scrape_argenprop(prop: dict, max_results: int = 15, max_paginas: int =
 
     return resultados
 
-
-# ── Test rápido ────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    prop_test = {
-        "barrio": "Palermo",
-        "tipo": "Departamento",
-        "ambientes": 2,
-        "metros_cubiertos": 55,
-    }
-    results = asyncio.run(scrape_argenprop(prop_test, max_results=10))
-    print(f"Resultados: {len(results)}")
-    for r in results:
-        print(r)

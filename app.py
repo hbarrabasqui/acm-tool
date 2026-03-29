@@ -215,17 +215,11 @@ with st.form("acm_form"):
     )
 
     st.markdown("#### 🗺️ Mapa de ubicación (opcional)")
-    st.caption("Si ingresás una dirección de referencia se mostrará el mapa. Si lo dejás vacío se omite.")
+    st.caption("Si ingresás una dirección de referencia se mostrará el mapa. El radio se puede ajustar después sin repetir la búsqueda.")
     direccion_referencia = st.text_input(
         "Dirección de referencia",
         placeholder="ej: Gorriti 4500, Palermo, Buenos Aires",
         help="La propiedad que querés valuar. Se marcará con un pin especial en el mapa."
-    )
-    radio_km = st.select_slider(
-        "Radio de búsqueda",
-        options=[0.5, 1.0, 1.5, 2.0, 3.0, 5.0],
-        value=2.0,
-        format_func=lambda x: f"{int(x*1000)}m" if x < 1 else f"{x:.1f}km"
     )
     usar_mapa = bool(direccion_referencia)
 
@@ -236,7 +230,7 @@ with st.form("acm_form"):
     with col_f2:
         usar_argenprop = st.checkbox("ArgenProp", value=True)
 
-    max_resultados = st.slider("Máximo de resultados por fuente", 5, 30, 15)
+    max_resultados = st.slider("Máximo de resultados por fuente", 5, 100, 50)
 
     submitted = st.form_submit_button("🔍 Buscar comparables y generar ACM")
 
@@ -330,7 +324,6 @@ if submitted:
     st.session_state["tipo"] = tipo
     st.session_state["usar_mapa"] = usar_mapa
     st.session_state["direccion_referencia"] = direccion_referencia
-    st.session_state["radio_km"] = radio_km
 
 # ── Resultados (se muestran desde session_state) ───────────────────────────────
 if "resultados" in st.session_state and st.session_state["resultados"]:
@@ -407,7 +400,13 @@ if "resultados" in st.session_state and st.session_state["resultados"]:
         st.subheader("🗺️ Mapa de comparables")
 
         dir_ref = st.session_state["direccion_referencia"]
-        radio_km = st.session_state["radio_km"]
+        radio_km = st.select_slider(
+            "Radio de referencia en el mapa",
+            options=[0.5, 1.0, 1.5, 2.0, 3.0, 5.0],
+            value=2.0,
+            format_func=lambda x: f"{int(x*1000)}m" if x < 1 else f"{x:.1f}km",
+            help="Cambiá el radio sin repetir la búsqueda — solo redibuja el mapa."
+        )
 
         ciudad_ctx = JURISDICCION_GEOCODING.get(prop.get("ciudad", "CABA"), "Ciudad Autónoma de Buenos Aires, Argentina")
         with st.spinner("Geolocalizando propiedades..."):
